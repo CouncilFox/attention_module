@@ -1,28 +1,4 @@
-# attention_vgg16_cbam_fixed.py
-
-import tensorflow as tf
-from tensorflow.keras.applications import VGG16
-from tensorflow.keras.layers import (
-    Input,
-    GlobalAveragePooling2D,
-    GlobalMaxPooling2D,
-    Dense,
-    Multiply,
-    Conv2D,
-    Add,
-    Activation,
-    Reshape,
-    Concatenate,
-    Lambda,
-    MaxPooling2D,
-    Flatten,
-)
-from tensorflow.keras.models import Model
-from tensorflow.keras import backend as K
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
-import numpy as np
-import matplotlib.pyplot as plt
-
+# attention_vgg16_cbam.py
 
 import os
 import tarfile
@@ -45,6 +21,7 @@ from tensorflow.keras.layers import (
     Lambda,
     MaxPooling2D,
     Flatten,
+    Dropout,
 )
 from tensorflow.keras.models import Model
 from tensorflow.keras import backend as K
@@ -68,12 +45,9 @@ dataset_tar_path = os.path.join(data_dir, "imagenette2.tgz")
 # Download and extract dataset if it doesn't exist
 if not os.path.exists(dataset_path):
     print("Downloading and extracting the Imagenette dataset...")
-    # Download the dataset
     urllib.request.urlretrieve(dataset_url, dataset_tar_path)
-    # Extract the dataset
     with tarfile.open(dataset_tar_path, "r:gz") as tar:
         tar.extractall(path=data_dir)
-    # Remove the downloaded .tgz file
     os.remove(dataset_tar_path)
     print("Download and extraction complete.")
 else:
@@ -107,8 +81,8 @@ validation_generator = val_datagen.flow_from_directory(
     class_mode="categorical",
 )
 
-# Load the VGG16 model with pretrained weights and include the top classification layers
-vgg16 = VGG16(weights="imagenet", include_top=True, input_shape=(224, 224, 3))
+# Load VGG16 without the top layers (exclude default classification layers)
+vgg16 = VGG16(weights="imagenet", include_top=False, input_shape=(224, 224, 3))
 
 
 # Implement the CBAM module
@@ -161,26 +135,15 @@ def cbam_module(input_feature, reduction_ratio=16):
     return spatial_refined
 
 
-# Function to freeze pretrained layers
+# Function to freeze pretrained layers (VGG16 base layers)
 def freeze_layers(model):
     for layer in model.layers:
-        if not isinstance(
-            layer,
-            (
-                Dense,
-                Multiply,
-                Add,
-                Activation,
-                Conv2D,
-                GlobalAveragePooling2D,
-                GlobalMaxPooling2D,
-                Lambda,
-                Reshape,
-                Concatenate,
-                Flatten,
-            ),
-        ):
+        if layer.name.startswith("block"):
+            # Freeze all layers that are part of VGG16
             layer.trainable = False
+        else:
+            # Leave CBAM and custom layers trainable
+            layer.trainable = True
 
 
 # Positions to insert CBAM
@@ -198,24 +161,27 @@ positions = {
 def create_model_with_cbam(position):
     input_tensor = Input(shape=(224, 224, 3))
     x = input_tensor
-    # Iterate over the layers in VGG16
+    # Iterate over the layers in VGG16 (without top layers)
     for layer in vgg16.layers:
         if layer.__class__.__name__ == "InputLayer":
             continue
         layer_config = layer.get_config()
         new_layer = layer.__class__.from_config(layer_config)
+        # Call the new layer on the input to build it
         x = new_layer(x)
+        # Set weights after the layer has been built
         if layer.get_weights():
             new_layer.set_weights(layer.get_weights())
         # Insert CBAM at the specified position
         if layer.name == position:
             x = cbam_module(x)
+    # Add custom classification layers
+    x = Flatten()(x)
+    x = Dense(256, activation="relu")(x)
+    x = Dropout(0.5)(x)
+    x = Dense(10, activation="softmax")(x)  # Corrected line
     model = Model(inputs=input_tensor, outputs=x)
     return model
-
-
-# Create models with CBAM at different positions
-models_with_cbam = {}
 
 
 # Insert CBAM between input and conv1-1
@@ -223,21 +189,29 @@ def create_model_with_cbam_at_input():
     input_tensor = Input(shape=(224, 224, 3))
     x = cbam_module(input_tensor)
     # Rebuild the model from the first convolutional layer
-    for layer in vgg16.layers[1:]:
+    for layer in vgg16.layers:
         if layer.__class__.__name__ == "InputLayer":
             continue
         layer_config = layer.get_config()
         new_layer = layer.__class__.from_config(layer_config)
+        # Call the new layer on the input to build it
         x = new_layer(x)
+        # Set weights after the layer has been built
         if layer.get_weights():
             new_layer.set_weights(layer.get_weights())
+    # Add custom classification layers
+    x = Flatten()(x)
+    x = Dense(256, activation="relu")(x)
+    x = Dropout(0.5)(x)
+    x = Dense(10, activation="softmax")(x)  # Corrected line
     model = Model(inputs=input_tensor, outputs=x)
     return model
 
 
+# Create models with CBAM at different positions
+models_with_cbam = {}
 models_with_cbam["input"] = create_model_with_cbam_at_input()
 
-# Insert CBAM at other specified positions
 for key, position in positions.items():
     if key != "input":
         print(f"Creating model with CBAM at position: {key}")
@@ -272,8 +246,17 @@ for key, model in models_with_cbam.items():
 
 # Baseline model without CBAM
 print("\nTraining baseline VGG16 model without CBAM\n")
-vgg16_baseline = VGG16(weights="imagenet", include_top=True, input_shape=(224, 224, 3))
+vgg16_baseline = VGG16(weights="imagenet", include_top=False, input_shape=(224, 224, 3))
+# Add custom classification layers
+x = vgg16_baseline.output
+x = Flatten()(x)
+x = Dense(256, activation="relu")(x)
+x = Dropout(0.5)(x)
+x = Dense(10, activation="softmax")(x)  # Corrected line
+vgg16_baseline = Model(inputs=vgg16_baseline.input, outputs=x)
+
 freeze_layers(vgg16_baseline)
+
 vgg16_baseline.compile(
     optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"]
 )
