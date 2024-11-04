@@ -248,36 +248,6 @@ for key, position in positions.items():
 for key in models_with_cbam:
     freeze_layers(models_with_cbam[key])
 
-# Data Preparation for Imagenette Dataset
-# Assuming you have the Imagenette dataset downloaded and extracted
-# Replace 'path_to_imagenette_train' and 'path_to_imagenette_val' with actual paths
-
-train_dir = "path_to_imagenette_train"
-val_dir = "path_to_imagenette_val"
-
-train_datagen = ImageDataGenerator(
-    rescale=1.0 / 255,
-    horizontal_flip=True,
-    width_shift_range=0.2,
-    height_shift_range=0.2,
-)
-
-train_generator = train_datagen.flow_from_directory(
-    train_dir,
-    target_size=(224, 224),
-    batch_size=32,
-    class_mode="categorical",
-)
-
-val_datagen = ImageDataGenerator(rescale=1.0 / 255)
-
-validation_generator = val_datagen.flow_from_directory(
-    val_dir,
-    target_size=(224, 224),
-    batch_size=32,
-    class_mode="categorical",
-)
-
 # Training parameters
 num_epochs = 5
 train_steps = train_generator.samples // train_generator.batch_size
