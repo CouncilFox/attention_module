@@ -1,1 +1,6 @@
 data/
+models/
+inference_results/
+evaluation_results/
+output_images/
+output_text/

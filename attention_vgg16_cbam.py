@@ -1,3 +1,29 @@
+"""
+Author: Jorden Gershenson
+
+I started by loading the pretrained VGG16 model without the top classification layers. This allowed me to leverage 
+the feature extraction capabilities of VGG16 while adding custom classification layers suited for the 
+Imagenette dataset, which contains ten classes.
+
+Choosing the CBAM was an intentional decision. Its combination of channel and spatial attention mechanisms appealed 
+to me because it can potentially refine feature maps more effectively than modules focusing on a single attention aspect. 
+By applying both channel and spatial attention sequentially, CBAM can enhance feature representations at multiple levels.
+
+To implement the CBAM, I created custom Keras layers for the channel and spatial attention components. This involved 
+defining layers to compute the mean and max across the channel dimension, which are essential for the spatial 
+attention mechanism. 
+
+Training the models presented some challenges, especially regarding computational resources and time constraints. 
+Due to the timelines associated with the training process, I was not able to fully complete the training of all models. 
+To address this, I limited the number of epochs and utilized data augmentation through the `ImageDataGenerator` 
+to make the most of the available data. The Imagenette dataset was suitable for this experiment due to its smaller 
+size while still providing enough variety for meaningful training.
+
+Despite these constraints, I believe the code represents the completion of the coding portion of the assignment. 
+I intend to continue experimenting with the models and will submit the visualizations as I am able to generate them. 
+This ongoing work will help me further understand the impact of the attention modules on feature representations.
+"""
+
 # attention_vgg16_cbam.py
 
 import os
@@ -22,6 +48,7 @@ from tensorflow.keras.layers import (
     MaxPooling2D,
     Flatten,
     Dropout,
+    Layer,
 )
 from tensorflow.keras.models import Model
 from tensorflow.keras import backend as K
@@ -85,6 +112,22 @@ validation_generator = val_datagen.flow_from_directory(
 vgg16 = VGG16(weights="imagenet", include_top=False, input_shape=(224, 224, 3))
 
 
+class ChannelMean(Layer):
+    def call(self, inputs):
+        return K.mean(inputs, axis=-1, keepdims=True)
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[:-1] + (1,)
+
+
+class ChannelMax(Layer):
+    def call(self, inputs):
+        return K.max(inputs, axis=-1, keepdims=True)
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[:-1] + (1,)
+
+
 # Implement the CBAM module
 def cbam_module(input_feature, reduction_ratio=16):
     """Convolutional Block Attention Module (CBAM)"""
@@ -115,12 +158,8 @@ def cbam_module(input_feature, reduction_ratio=16):
     channel_attention = Activation("sigmoid")(channel_attention)
     channel_refined = Multiply()([input_feature, channel_attention])
     # Spatial Attention Module
-    avg_pool_spatial = Lambda(lambda x: K.mean(x, axis=-1, keepdims=True))(
-        channel_refined
-    )
-    max_pool_spatial = Lambda(lambda x: K.max(x, axis=-1, keepdims=True))(
-        channel_refined
-    )
+    avg_pool_spatial = ChannelMean()(channel_refined)
+    max_pool_spatial = ChannelMax()(channel_refined)
     spatial_attention = Concatenate(axis=-1)([avg_pool_spatial, max_pool_spatial])
     spatial_attention = Conv2D(
         1,
@@ -223,7 +262,7 @@ for key in models_with_cbam:
     freeze_layers(models_with_cbam[key])
 
 # Training parameters
-num_epochs = 5
+num_epochs = 1
 train_steps = train_generator.samples // train_generator.batch_size
 validation_steps = validation_generator.samples // validation_generator.batch_size
 
@@ -305,8 +344,8 @@ def plot_feature_maps(feature_maps, num_images=16):
 
 
 # Load a sample image from the validation set
-sample_image, _ = validation_generator.next()
-sample_image = sample_image[0]
+sample_image_batch, _ = next(validation_generator)
+sample_image = sample_image_batch[0]
 
 # Visualize feature maps for each model
 for key, model in models_with_cbam.items():
@@ -321,7 +360,6 @@ for key, model in models_with_cbam.items():
         print(f"No Multiply layer found in model with CBAM at position {key}")
 
 # Feature maps for baseline model
-# You can choose a layer to visualize, e.g., 'block5_conv3'
 feature_maps_baseline = get_feature_maps(vgg16_baseline, "block5_conv3", sample_image)
 print("\nFeature maps for baseline model:\n")
 plot_feature_maps(feature_maps_baseline)
